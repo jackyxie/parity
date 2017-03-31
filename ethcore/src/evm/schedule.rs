@@ -165,6 +165,11 @@ impl Schedule {
 		}
 	}
 
+	/// Schedule for the Metropolis of the Ethereum main net.
+	pub fn new_metropolis() -> Schedule {
+		Self::new_post_eip150(24576, true, true, true, true)
+	}
+
 	fn new(efcd: bool, hdc: bool, tcg: usize) -> Schedule {
 		Schedule {
 			exceptional_failed_code_deposit: efcd,

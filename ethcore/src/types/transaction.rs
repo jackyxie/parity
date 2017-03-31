@@ -183,8 +183,8 @@ impl Transaction {
 	pub fn invalid_sign(self) -> UnverifiedTransaction {
 		UnverifiedTransaction {
 			unsigned: self,
-			r: U256::default(),
-			s: U256::default(),
+			r: U256::one(),
+			s: U256::one(),
 			v: 0,
 			hash: 0.into(),
 		}.compute_hash()
@@ -195,8 +195,8 @@ impl Transaction {
 		SignedTransaction {
 			transaction: UnverifiedTransaction {
 				unsigned: self,
-				r: U256::default(),
-				s: U256::default(),
+				r: U256::one(),
+				s: U256::one(),
 				v: 0,
 				hash: 0.into(),
 			}.compute_hash(),
@@ -315,6 +315,7 @@ impl UnverifiedTransaction {
 	/// The network ID, or `None` if this is a global transaction.
 	pub fn network_id(&self) -> Option<u64> {
 		match self.v {
+			v if self.is_unsigned() => Some(v),
 			v if v > 36 => Some((v - 35) / 2),
 			_ => None,
 		}
@@ -348,29 +349,25 @@ impl UnverifiedTransaction {
 	// TODO: consider use in block validation.
 	#[cfg(test)]
 	#[cfg(feature = "json-tests")]
-	pub fn validate(self, schedule: &Schedule, require_low: bool, allow_network_id_of_one: bool) -> Result<UnverifiedTransaction, Error> {
-		if require_low && !self.signature().is_low_s() {
-			return Err(EthkeyError::InvalidSignature.into())
+	pub fn validate(self, schedule: &Schedule, require_low: bool, allow_network_id_of_one: bool, allow_empty_signature: bool) -> Result<UnverifiedTransaction, Error> {
+		let chain_id = if allow_network_id_of_one { Some(1) } else { None };
+		self.verify_basic(require_low, chain_id, allow_empty_signature)?;
+		if !allow_empty_signature || !self.is_unsigned() {
+			self.recover_public()?;
 		}
-		match self.network_id() {
-			None => {},
-			Some(1) if allow_network_id_of_one => {},
-			_ => return Err(TransactionError::InvalidNetworkId.into()),
-		}
-		self.recover_public()?;
 		if self.gas < U256::from(self.gas_required(&schedule)) {
-			Err(TransactionError::InvalidGasLimit(::util::OutOfBounds{min: Some(U256::from(self.gas_required(&schedule))), max: None, found: self.gas}).into())
-		} else {
-			Ok(self)
+			return Err(TransactionError::InvalidGasLimit(::util::OutOfBounds{min: Some(U256::from(self.gas_required(&schedule))), max: None, found: self.gas}).into())
 		}
+		Ok(self)
 	}
 
 	/// Verify basic signature params. Does not attempt sender recovery.
 	pub fn verify_basic(&self, check_low_s: bool, chain_id: Option<u64>, allow_empty_signature: bool) -> Result<(), Error> {
-		if check_low_s && !allow_empty_signature {
+		if check_low_s && !(allow_empty_signature && self.is_unsigned()) {
 			self.check_low_s()?;
 		}
-		if !allow_empty_signature && self.is_unsigned() {
+		// EIP-86: Transactions of this form MUST have gasprice = 0, nonce = 0, value = 0, and do NOT increment the nonce of account 0.
+		if allow_empty_signature && self.is_unsigned() && !(self.gas_price.is_zero() && self.value.is_zero() && self.nonce.is_zero()) {
 			return Err(EthkeyError::InvalidSignature.into())
 		}
 		match (self.network_id(), chain_id) {
